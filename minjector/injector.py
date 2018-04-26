@@ -9,7 +9,7 @@ T = TypeVar('T')
 V = TypeVar('V')
 
 
-class ReaderMonadCallable:
+class ReaderMonad:
     def __init__(self, func):
         self._func = func
 
@@ -17,37 +17,36 @@ class ReaderMonadCallable:
         return self._func(env)
 
 
-class ReaderMonad(Generic[T, V]):
+class ReaderMonadOp(Generic[T, V]):
     @staticmethod
     def unit(v) -> Callable[[T], V]:
         def _(env: T):
             return v
 
-        return ReaderMonadCallable(_)
-
-    # @staticmethod
-    # def ask(mf: Callable[[Any], Callable[[T], 'ReaderMonad']]) -> Callable[[T], 'ReaderMonad']:
-    #     def _(env: T) -> 'ReaderMonad':
-    #         return mf(env)(env)
-    #
-    #     return ReaderMonadCallable(_)
+        return ReaderMonad(_)
 
     @staticmethod
-    def asks(mv: Callable[[T], Any], mf: Callable[[Any], Callable[[T], 'ReaderMonad']]) -> Callable[[T], 'ReaderMonad']:
+    def ask(mf: Callable[[Any], Callable[[T], 'ReaderMonad']]) -> Callable[[T], 'ReaderMonad']:
         def _(env: T) -> 'ReaderMonad':
+            return mf(env)(env)
+
+        return ReaderMonad(_)
+
+    @staticmethod
+    def asks(mv: Callable[[T], Any], mf: Callable[[Any], ReaderMonad]) -> ReaderMonad:
+        def _(env: T) -> 'ReaderMonadOp':
             val = mv(env)
             return mf(val)(env)
 
-        return ReaderMonadCallable(_)
+        return ReaderMonad(_)
 
     @staticmethod
-    def local(ef: Callable[[T], T], mv: Callable[[T], Any], mf: Callable[[Any], Callable[[T], 'ReaderMonad']]) -> Callable[[T], 'ReaderMonad']:
-        def _(env: T) -> 'ReaderMonad':
+    def local(ef: Callable[[T], T], reader: ReaderMonad) -> ReaderMonad:
+        def _(env: T) -> Any:
             new_env = ef(env)
-            val = mv(new_env)
-            return mf(val)(new_env)
+            return reader(new_env)
 
-        return ReaderMonadCallable(_)
+        return ReaderMonad(_)
 
     @staticmethod
     def concat(f1, f2):
@@ -55,7 +54,7 @@ class ReaderMonad(Generic[T, V]):
             new_env = f1(env)
             return f2(new_env)
 
-        return ReaderMonadCallable(_)
+        return ReaderMonad(_)
 
 
 class Provider:
@@ -114,7 +113,7 @@ class InjectionEnvironment:
                     init = to.__init__
                     func = init(instance)
 
-                    if isinstance(func, ReaderMonadCallable):
+                    if isinstance(func, ReaderMonad):
                         func(self)
 
                     return instance
@@ -173,9 +172,9 @@ def inject_base(bindings, lazy=False, func=False):
                 def brackets(env):
                     dependencies = dict(env[1])
                     dependencies.update(kwargs)
-                    ReaderMonad.unit(init_func(self=self_, *args, **dependencies))
+                    ReaderMonadOp.unit(init_func(self=self_, *args, **dependencies))
 
-                reader = ReaderMonad.asks(lambda e: e, lambda e: brackets)
+                reader = ReaderMonadOp.asks(lambda e: e, lambda e: brackets)
 
                 for key, arg in bindings.items():
                     def modify_env(env, key=key, arg=arg):
@@ -188,13 +187,9 @@ def inject_base(bindings, lazy=False, func=False):
                             dependencies[key] = arg(env[0])
                         return (env[0], dependencies)
 
-                    reader = ReaderMonad.local(modify_env, lambda e: e, lambda e, reader=reader:
-                        reader
-                    )
+                    reader = ReaderMonadOp.local(modify_env, reader)
 
-                return ReaderMonad.local(lambda env: (env, {}), lambda e: e, lambda e, reader=reader:
-                    reader
-                )
+                return ReaderMonadOp.local(lambda env: (env, {}), reader)
 
         else:
             raise Exception('inject is only allowed for binded functions')
